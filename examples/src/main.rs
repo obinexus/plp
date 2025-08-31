@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
 use ring::digest;
-use bincode;
 use std::hash::Hash;
 
 // DIRAM integrity enum (2-bit packing)
@@ -90,7 +89,6 @@ pub struct AVLNode<T: Ord + Copy> {
     pub height: i32,
     pub left: Option<Box<AVLNode<T>>>,
     pub right: Option<Box<AVLNode<T>>>,
-    #[allow(dead_code)]
     pub phenomenohog: Option<PhenomenohogBlock>,
 }
 
@@ -273,8 +271,8 @@ pub fn seal_node(node: &EnhancedTrieNode) -> [u8; 32] {
     out
 }
 
-// Wrapper for f64 to implement Hash and Eq
-#[derive(Clone, Copy, PartialEq)]
+// Wrapper for f64 to implement Hash, Eq, Serialize, and Deserialize
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HashableF64(f64);
 
 impl HashableF64 {
@@ -283,14 +281,14 @@ impl HashableF64 {
 
 impl Hash for HashableF64 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write(self.0.to_bits());
+        state.write(&self.0.to_bits().to_le_bytes());
     }
 }
 
 impl Eq for HashableF64 {}
 
 // Bayesian Emotional Model
-#[derive(Serialize, Deserialize, Clone, Hash, Eq, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Hash, Eq, PartialEq)]
 pub enum EmotionType {
     Loneliness, Stress, Anxiety, Contentment, Engagement,
 }
@@ -364,13 +362,14 @@ impl FourDTensor {
     }
     pub fn plan_motion(&self, phenomenohog: &PhenomenohogBlock, emotional_state: &HashMap<EmotionType, f64>) -> Vec<[usize; 4]> {
         let mut cost_tensor = self.data.clone();
+        let context_factor = if phenomenohog.frame_of_reference.contains("healthcare") { 1.2 } else { 1.0 };
         for i in 0..self.dims[0] {
             for j in 0..self.dims[1] {
                 for k in 0..self.dims[2] {
                     for t in 0..self.dims[3] {
                         let idx = i * self.dims[1] * self.dims[2] * self.dims[3] + j * self.dims[2] * self.dims[3] + k * self.dims[3] + t;
                         if *emotional_state.get(&EmotionType::Stress).unwrap_or(&0.0) > 0.7 {
-                            cost_tensor[idx] *= 1.5;
+                            cost_tensor[idx] *= 1.5 * context_factor;
                         }
                     }
                 }
@@ -428,10 +427,10 @@ fn main() {
     let phenomenohog = PhenomenohogBlock {
         session: "sess-42".to_string(),
         scope: "person".to_string(),
-        type_field: "preference".to_string(),
-        description: "User entered name during onboarding".to_string(),
+        type_field: "government_id".to_string(),
+        description: "User provided national insurance number".to_string(),
         timestamp: Utc::now(),
-        frame_of_reference: "user:nnamdi_miah,context:healthcare_onboarding".to_string(),
+        frame_of_reference: "user:nnamdi_miah,context:ni_validation,ni:AB123456C".to_string(),
         apex_14_profile: Apex14Profile {
             visual: 0.8, auditory: 0.6, tactile: 0.5, olfactory: 0.3,
             gustatory: 0.2, vestibular: 0.4, proprioceptive: 0.7,
@@ -442,7 +441,7 @@ fn main() {
         cultural_markers: vec!["igbo_tradition".to_string()],
     };
 
-    println!("📝 Inserting user: nnamdi miah");
+    println!("📝 Inserting user: nnamdi miah with NI: AB123456C");
     trie.insert_with_context("nnamdi miah", phenomenohog.clone());
 
     let mut model = BayesianEmotionalModel::new();
