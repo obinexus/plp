@@ -1,0 +1,324 @@
+use std::collections::HashMap;
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
+use ring::digest;
+use bincode;
+use core::sync::atomic::{AtomicUsize, Ordering};
+use core::mem::MaybeUninit;
+
+// DIRAM integrity enum (2-bit packing)
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
+pub enum Diram {
+    Null = 0b00,
+    Partial = 0b01,
+    Collapse = 0b10,
+    Intact = 0b11,
+}
+
+impl From<u8> for Diram {
+    fn from(b: u8) -> Self {
+        match b & 0b11 {
+            0b00 => Diram::Null,
+            0b01 => Diram::Partial,
+            0b10 => Diram::Collapse,
+            _ => Diram::Intact,
+        }
+    }
+}
+
+// Emotional state with Bayesian belief
+#[derive(Clone, Serialize, Deserialize)]
+pub struct EmotionalState {
+    pub label: EmotionLabel,
+    pub alpha: f32,
+    pub beta: f32,
+    pub last_update: DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum EmotionLabel { Anxiety, Comfort, Neutral }
+
+impl EmotionalState {
+    pub fn new(label: EmotionLabel, alpha: f32, beta: f32) -> Self {
+        EmotionalState {
+            label,
+            alpha,
+            beta,
+            last_update: Utc::now(),
+        }
+    }
+    pub fn observe(&mut self, obs: bool) {
+        if obs { self.alpha += 1.0 } else { self.beta += 1.0 }
+        self.last_update = Utc::now();
+    }
+    pub fn ci(&self) -> (f32, f32) {
+        let a = self.alpha;
+        let b = self.beta;
+        let mean = a / (a + b);
+        let var = (a * b) / ((a + b).powi(2) * (a + b + 1.0));
+        let err = 1.96 * var.sqrt();
+        (mean - err, mean + err)
+    }
+}
+
+// Phenomenohog block with frame of reference
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PhenomenohogBlock {
+    pub session: String,
+    pub scope: String,
+    pub type_field: String,
+    pub description: String,
+    pub timestamp: DateTime<Utc>,
+    pub frame_of_reference: String,
+    pub apex_14_profile: Apex14Profile,
+    pub diram_state: u8,
+    pub cultural_markers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Apex14Profile {
+    pub visual: f32, 
+    pub auditory: f32, 
+    pub tactile: f32, 
+    pub olfactory: f32,
+    pub gustatory: f32, 
+    pub vestibular: f32, 
+    pub proprioceptive: f32,
+    pub temporal: f32, 
+    pub emotional: f32, 
+    pub cognitive: f32, 
+    pub cultural: f32,
+    pub spiritual: f32, 
+    pub intentional: f32, 
+    pub relational: f32,
+}
+
+// AVL Node (stack-allocated)
+#[derive(Clone)]
+pub struct AVLNode<T: Ord + Copy> {
+    pub value: T,
+    pub height: i32,
+    pub left: Option<Box<AVLNode<T>>>,
+    pub right: Option<Box<AVLNode<T>>>,
+    #[allow(dead_code)]
+    pub phenomenohog: Option<PhenomenohogBlock>,
+}
+
+// FIX: Remove unsafe static arena - just use Box allocation for now
+impl<T: Ord + Copy> AVLNode<T> {
+    fn new(value: T, phenomenohog: Option<PhenomenohogBlock>) -> Self {
+        AVLNode {
+            value,
+            height: 1,
+            left: None,
+            right: None,
+            phenomenohog,
+        }
+    }
+    fn height(node: &Option<Box<AVLNode<T>>>) -> i32 {
+        node.as_ref().map_or(0, |n| n.height)
+    }
+    fn balance_factor(&self) -> i32 {
+        Self::height(&self.left) - Self::height(&self.right)
+    }
+    fn update_height(&mut self) {
+        self.height = 1 + std::cmp::max(Self::height(&self.left), Self::height(&self.right));
+    }
+    fn rotate_right(mut y: Box<AVLNode<T>>) -> Box<AVLNode<T>> {
+        let mut x = y.left.take().unwrap();
+        y.left = x.right.take();
+        y.update_height();
+        x.right = Some(y);
+        x.update_height();
+        x
+    }
+    fn rotate_left(mut x: Box<AVLNode<T>>) -> Box<AVLNode<T>> {
+        let mut y = x.right.take().unwrap();
+        x.right = y.left.take();
+        x.update_height();
+        y.left = Some(x);
+        y.update_height();
+        y
+    }
+    fn insert(root: Option<Box<AVLNode<T>>>, value: T, phenomenohog: Option<PhenomenohogBlock>) -> Option<Box<AVLNode<T>>> {
+        let mut node = root.unwrap_or_else(|| Box::new(AVLNode::new(value, phenomenohog.clone())));
+        
+        if value < node.value {
+            let left = Self::insert(node.left.take(), value, phenomenohog);
+            node.left = left;
+        } else if value > node.value {
+            let right = Self::insert(node.right.take(), value, phenomenohog);
+            node.right = right;
+        } else {
+            return Some(node);
+        }
+        
+        node.update_height();
+        let balance = node.balance_factor();
+        
+        if balance > 1 {
+            if value < node.left.as_ref().unwrap().value {
+                return Some(Self::rotate_right(node));
+            } else {
+                node.left = Some(Self::rotate_left(node.left.take().unwrap()));
+                return Some(Self::rotate_right(node));
+            }
+        }
+        
+        if balance < -1 {
+            if value > node.right.as_ref().unwrap().value {
+                return Some(Self::rotate_left(node));
+            } else {
+                node.right = Some(Self::rotate_right(node.right.take().unwrap()));
+                return Some(Self::rotate_left(node));
+            }
+        }
+        
+        Some(node)
+    }
+}
+
+// Emotion Trie node
+#[derive(Clone)]
+pub struct EmotionTrieNode {
+    pub character: char,
+    pub children: HashMap<char, Box<EmotionTrieNode>>,
+    pub is_terminal: bool,
+    pub avl_node: Option<Box<AVLNode<char>>>,
+    pub phenomenohog: Option<PhenomenohogBlock>,
+    pub emotions: HashMap<String, EmotionalState>,
+    pub diram: Diram,
+    pub aura_receipt: Option<[u8; 32]>,
+}
+
+impl EmotionTrieNode {
+    pub fn new(character: char, phenomenohog: Option<PhenomenohogBlock>) -> Self {
+        EmotionTrieNode {
+            character,
+            children: HashMap::new(),
+            is_terminal: false,
+            avl_node: Some(Box::new(AVLNode::new(character, phenomenohog.clone()))),
+            phenomenohog,
+            emotions: HashMap::new(),
+            diram: Diram::Null,
+            aura_receipt: None,
+        }
+    }
+    pub fn insert(&mut self, name: &str, phenomenohog: PhenomenohogBlock) {
+        let mut current = self;
+        for c in name.chars().take(32) {
+            current = current.children.entry(c).or_insert_with(|| 
+                Box::new(EmotionTrieNode::new(c, Some(phenomenohog.clone())))
+            );
+            current.avl_node = AVLNode::insert(current.avl_node.take(), c, Some(phenomenohog.clone()));
+            current.diram = Diram::Partial;
+        }
+        current.is_terminal = true;
+        current.diram = Diram::Intact;
+        current.aura_receipt = Some(seal_node(current));
+    }
+    pub fn prune(&mut self, threshold: f32) -> bool {
+        let mut keep = false;
+        for emo in self.emotions.values() {
+            let entropy = emo.alpha.ln() + emo.beta.ln() - (emo.alpha + emo.beta).ln();
+            if entropy > threshold { keep = true; }
+        }
+        self.children.retain(|_, child| {
+            let child_keep = child.prune(threshold);
+            keep |= child_keep;
+            child_keep
+        });
+        keep
+    }
+}
+
+// AVL tree for DOB (integers)
+#[derive(Clone)]
+struct DOBNode {
+    avl_node: Option<Box<AVLNode<i32>>>,
+}
+
+impl DOBNode {
+    fn new() -> Self { DOBNode { avl_node: None } }
+    fn insert(&mut self, year: i32, month: i32, day: i32, phenomenohog: PhenomenohogBlock) {
+        self.avl_node = AVLNode::insert(self.avl_node.take(), year, Some(phenomenohog.clone()));
+        self.avl_node = AVLNode::insert(self.avl_node.take(), month, Some(phenomenohog.clone()));
+        self.avl_node = AVLNode::insert(self.avl_node.take(), day, Some(phenomenohog));
+    }
+}
+
+// AVL tree for NI validation (boolean)
+#[derive(Clone)]
+struct NINode {
+    avl_node: Option<Box<AVLNode<bool>>>,
+}
+
+impl NINode {
+    fn new() -> Self { NINode { avl_node: None } }
+    fn insert(&mut self, is_valid: bool, phenomenohog: PhenomenohogBlock) {
+        self.avl_node = AVLNode::insert(self.avl_node.take(), is_valid, Some(phenomenohog));
+    }
+}
+
+// AuraSeal SHA-256 receipt
+pub fn seal_node(node: &EmotionTrieNode) -> [u8; 32] {
+    let mut ctx = digest::Context::new(&digest::SHA256);
+    ctx.update(&bincode::serialize(&node.emotions).unwrap());
+    if let Some(ph) = &node.phenomenohog {
+        ctx.update(ph.frame_of_reference.as_bytes());
+    }
+    let digest = ctx.finish();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(digest.as_ref());
+    out
+}
+
+// Example usage
+fn main() {
+    println!("🚀 OBIAI Consciousness Preservation System Starting...");
+    
+    let mut trie = EmotionTrieNode::new('\0', None);
+    let phenomenohog = PhenomenohogBlock {
+        session: "sess-42".to_string(),
+        scope: "person".to_string(),
+        type_field: "preference".to_string(),
+        description: "User entered name during onboarding".to_string(),
+        timestamp: Utc::now(),
+        frame_of_reference: "user:nnamdi_miah,context:healthcare_onboarding".to_string(),
+        apex_14_profile: Apex14Profile {
+            visual: 0.8, auditory: 0.6, tactile: 0.5, olfactory: 0.3,
+            gustatory: 0.2, vestibular: 0.4, proprioceptive: 0.7,
+            temporal: 0.9, emotional: 0.85, cognitive: 0.75,
+            cultural: 0.65, spiritual: 0.5, intentional: 0.8, relational: 0.9,
+        },
+        diram_state: Diram::Null as u8,
+        cultural_markers: vec!["igbo_tradition".to_string()],
+    };
+    
+    println!("📝 Inserting user: nnamdi miah");
+    trie.insert("nnamdi miah", phenomenohog.clone());
+    
+    trie.emotions.entry("sess-42".into())
+        .or_insert(EmotionalState::new(EmotionLabel::Anxiety, 1.0, 1.0))
+        .observe(true);
+    
+    trie.aura_receipt = Some(seal_node(&trie));
+    
+    // Display confidence interval
+    if let Some(emotion) = trie.emotions.get("sess-42") {
+        let (lower, upper) = emotion.ci();
+        println!("📊 Anxiety confidence interval: [{:.3}, {:.3}]", lower, upper);
+    }
+    
+    println!("🌳 Pruning low-entropy nodes...");
+    trie.prune(0.5);
+
+    let mut dob_tree = DOBNode::new();
+    dob_tree.insert(1980, 5, 15, phenomenohog.clone());
+
+    let mut ni_tree = NINode::new();
+    ni_tree.insert(true, phenomenohog);
+    
+    println!("✅ OBIAI system initialized successfully!");
+}
