@@ -1,0 +1,37 @@
+@startuml
+skinparam classAttributeIconSize 0
+
+class TrieNode {
+    +int terminal
+    +Phenotype *p
+    +AVLChild *children
+}
+
+class AVLChild {
+    +char key
+    +TrieNode *child
+    +int height
+    +AVLChild *left
+    +AVLChild *right
+}
+
+class Phenotype {
+    +double score
+    +uint64_t visits
+    +QualFlags qual
+    +char *meta
+}
+
+enum QualFlags {
+    QUAL_NONE
+    QUAL_RESILIENT
+    QUAL_CREATIVE
+    QUAL_ANXIOUS
+    QUAL_OPTIMIST
+}
+
+TrieNode "1" --> "*" AVLChild : children
+AVLChild "1" --> "1" TrieNode : child
+TrieNode "1" --> "0..1" Phenotype : phenotype
+Phenotype --> QualFlags
+@enduml
