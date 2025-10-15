@@ -1,4 +1,6 @@
-# Phenodata Structure Documentation: AVL-Trie Hybrid for Government ID Systems
+# PLP Framework - Phenomological Lensing Principle 
+## By Nnamdi Michael Okpala
+ Phenodata Structure Documentation: AVL-Trie Hybrid for Government ID Systems
 
 ## Overview: Phenodata Structure
 The PLP framework alogn with othe plp frmaoek dag resoluion aims to addressthe problem step for a point of view which is  a vector to resolve hwo didfern peopel person or thign intract over varies system based on experiment and top-don and intuion bottom up
