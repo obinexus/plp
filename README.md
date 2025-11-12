@@ -2,6 +2,10 @@
 ## By Nnamdi Michael Okpala
 ### Phenodata Structure Documentation: AVL-Trie Hybrid for Government ID Systems
 
+![PLP](https://img.shields.io/badge/PLP-Phenomic_Lensing-FFD700?style=for-the-badge)
+![95.4%](https://img.shields.io/badge/Coherence-95.4%25-00FF00?style=for-the-badge)
+![Neurodivergent-First](https://img.shields.io/badge/Design-Neurodivergent_First-FF69B4?style=for-the-badge)
+![OBINexus](https://img.shields.io/badge/Built_by-OBINexus-1E90FF?style=for-the-badge)
 ---
 
 ## Overview: Phenodata Structure
